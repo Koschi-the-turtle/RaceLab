@@ -1,13 +1,15 @@
 import pygame
 import sys
 
-WIN_W, WIN_H = 1920, 1080
-CELL = 20 #grid cell size
-MENU_H = 0 #it's supposed to be the toolbar but because of the unprecented amount of terms starting with "tool" all over this program as well as for the sake of this code's overall readability, I took the more or less wise decision to call it "menu" (it's just my lazy ass can't write shit longer than 4 letters...) <- useless ahh comment just go to bed already aaaah t orange bouin
-G_COLUMN = WIN_W//CELL
-G_ROW = (WIN_H - MENU_H)//CELL
+#NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
 
-#colors✨
+WIN_W, WIN_H = 1920, 1080
+MENU_H = 0 #it's supposed to be the toolbar but because of the unprecented amount of terms starting with "tool" all over this program as well as for the sake of this code's overall readability, I took the more or less wise decision to call it "menu" (it's just that my lazy ass can't write shit longer than 4 letters...) <- useless ahh comment just go to bed already aaaah t orange bouin
+ZOOM_MIN = 2.5
+ZOOM_MAX = 200
+ZOOM_DEFAULT = 40
+
+#slay queen 💅✨ (aka colors)
 BGC = (25, 30, 35)
 GRIDC = (50, 120, 210)
 WALLC = (200, 230, 230)
@@ -53,6 +55,16 @@ TOOL_COLORS = {
     ERASE_TOOL: BGC
 }
 
+def screen_to_grid(mx, my, cam_x, cam_y, zoom):
+    col = int((mx - cam_x) // zoom)
+    row = int((my - cam_y) // zoom)
+    return col, row
+
+def grid_to_screen(col, row, cam_x, cam_y, zoom):
+    x = int(col*zoom + cam_x)
+    y = int(row*zoom + cam_y)
+    return x, y
+
 class MapState:
     def __init__(self):
         self.walls = set()
@@ -80,8 +92,6 @@ class MapState:
             self.finish = snap["finish"]
 
     def apply_tool(self, col, row, tool):
-        if not(0 <= col < G_COLUMN and 0<= row < G_ROW):
-            return
         if tool == WALL_TOOL:
             self.walls.add((col, row))
             self.spawn.discard((col, row))
@@ -100,7 +110,52 @@ class MapState:
             self.spawn.discard((col, row))
             self.finish.discard((col, row))
 
+def draw_grid(surf, cam_x, cam_y, zoom):
+    grid_h = WIN_H - MENU_H
+
+    alpha = min(255, int((zoom - 1)*20))
+    grid_color = (*GRIDC, alpha)
+    grid_surface = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+
+    col_start = int(-cam_x // zoom) - 1
+    col_end = int((WIN_W - cam_x) // zoom) + 1
+    row_start = int(-cam_y // zoom) - 1
+    row_end = int((grid_h - cam_y) // zoom) + 1
+    for c in range(col_start, col_end + 1):
+        x = int(c*zoom + cam_x)
+        pygame.draw.line(grid_surface, grid_color, (x, 0), (x, grid_h))
+    for r in range(row_start, row_end + 1):
+        y = int(r*zoom + cam_y)
+        pygame.draw.line(grid_surface, grid_color, (0, y), (WIN_W, y))
+    surf.blit(grid_surface, (0, 0))
+
+def draw_tile(surf, col, row, color, font, label, cam_x, cam_y, zoom, alpha=255):
+    x, y = grid_to_screen(col, row, cam_x, cam_y, zoom)
+    size = max(1, int(zoom) - 1)
+
+    #skip if outside of grid area
+    if x + size < 0 or x > WIN_W or y + size < 0 or y > WIN_H - MENU_H:
+        return
     
+    if alpha < 255:
+        s = pygame.Surface((size, size), pygame.SRCALPHA)
+        s.fill((*color, alpha))
+        surf.blit(s, (x+1, y + 1))
+    else:
+        pygame.draw.rect(surf, color, (x + 1, y + 1, size, size))
+
+    if label and font and zoom >= 14:
+        cx = x + int(zoom) // 2
+        cy = y + int(zoom) //2
+        lbl = font.render(label, True, BGC)
+        surf.blit(lbl, (cx - lbl.get_width() // 2, cy - lbl.get_height() // 2))
+
+def draw_hover(surf, col, row, tool, cam_x, cam_y, zoom, font):
+    color = TOOL_COLORS.get(tool, BGC)
+    label = {"spawn": "S", "finish": "F"}.get(tool)
+    draw_tile(surf, col, row, color, font, label, cam_x, cam_y, zoom, alpha=100)
+
+
 class ToolButton:
     W, H = 160, 60
     RADIUS = 8
@@ -176,43 +231,7 @@ class ToolButton:
 
 #Ok back to work now
 
-def draw_tile(surf, col, row, color, font, label, alpha=255):
-    x = col*CELL
-    y = row*CELL
-    cx = col*CELL + CELL//2
-    cy = row*CELL  + CELL//2
-    if alpha<255:
-        s = pygame.Surface((CELL - 1, CELL - 1), pygame.SRCALPHA)
-        s.fill((*color, alpha))
-        surf.blit(s, (x + 1, y + 1))
-    else:
-        pygame.draw.rect(surf, color, (x + 1, y + 1, CELL - 1, CELL - 1))
-    lbl = font.render(label, True, BGC)
-    surf.blit(lbl, (cx - lbl.get_width() //2, cy - lbl.get_height() // 2))
-    
-def draw_entity(surf, col, row, color, font, label):
-    cx = col*CELL + CELL//2
-    cy = row*CELL  + CELL//2
-    r = CELL//2 - 4
-    pygame.draw.circle(surf, color, (cx, cy), r)
-    pygame.draw.circle(surf, (255, 255, 255), (cx, cy), r, 2)
-    lbl = font.render(label, True, BGC)
-    surf.blit(lbl, (cx - lbl.get_width() //2, cy - lbl.get_height() // 2))
 
-def draw_grid(surf):
-    for c in range(G_COLUMN + 1):
-        x = c*CELL
-        pygame.draw.line(surf, GRIDC, (x, 0), (x, WIN_H - MENU_H))
-    for r in range(G_ROW + 1):
-        y = r*CELL
-        pygame.draw.line(surf, GRIDC, (0, y), (WIN_W, y))
-
-def draw_hover(surf, col, row, tool):
-    if not (0 <= col < G_COLUMN and 0 <= row < G_ROW):
-        return
-    color = TOOL_COLORS.get(tool, BGC)
-    font = pygame.font.SysFont("segoeui", 18, bold=True)
-    draw_tile(surf, col, row, color, font, None, alpha=100)
 
 def main():
     pygame.init()
@@ -231,6 +250,12 @@ def main():
     erasing = False
     last_cell = None
 
+    cam_x, cam_y = float(WIN_W // 2), float(WIN_H // 2)
+    zoom = float(ZOOM_DEFAULT)
+    panning = False
+    pan_start = None
+    pan_origin = None
+
     menu_y = WIN_H - MENU_H
     n = len(TOOLS)
     spacing = 180
@@ -241,9 +266,6 @@ def main():
         for i, tool in enumerate(TOOLS)
     ]
 
-    grid_surf = pygame.Surface((WIN_W, WIN_H - MENU_H))
-    grid_surf.fill(BGC)
-    draw_grid(grid_surf)
 
     running = True
     while running:
@@ -251,8 +273,7 @@ def main():
         mx, my = mouse_pos
 
         #When cell hovered
-        hover_column = mx//CELL
-        hover_row = my//CELL
+        hover_column, hover_row = screen_to_grid(mx, my, cam_x, cam_y, zoom)
         in_grid = my < WIN_H-MENU_H
 
         for btn in buttons:
@@ -266,7 +287,7 @@ def main():
                     running = False
                 elif event.key in KEYS:
                     active_tool = KEYS[event.key]
-                elif event.key == pygame.K_z and(event.mod & pygame.KMOD_CONTROL):
+                elif event.key == pygame.K_z and(event.mod & pygame.KMOD_CTRL):
                     state.undo()
                 elif event.key == pygame.K_RETURN:
                     print("Map JSON: \n", state.to_json()) #To do later, does nothing rn :|
@@ -291,6 +312,10 @@ def main():
                     last_cell = None
                     state.apply_tool(hover_column, hover_row, ERASE_TOOL)
                     last_cell = (hover_column, hover_row)
+                elif event.button == 2:
+                    panning = True
+                    pan_start = (mx, my)
+                    pan_origin = (cam_x, cam_y)
                 
             elif event.type == pygame.MOUSEMOTION:
                 cell = (hover_column, hover_row)
@@ -300,24 +325,45 @@ def main():
                 elif erasing and in_grid and cell != last_cell:
                     state.apply_tool(hover_column, hover_row, ERASE_TOOL)
                     last_cell = cell
+                elif panning:
+                    cam_x = pan_origin[0] + (mx - pan_start[0])
+                    cam_y = pan_origin[1] + (my - pan_start[1])
 
             elif event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 1: painting = False
-                if event.button == 3: erasing = False
-                last_cell = None
+                if event.button == 1: 
+                    painting = False
+                if event.button == 3: 
+                    erasing = False
+                    last_cell = None
+                if event.button == 2:
+                    panning = False
+
+            elif event.type == pygame.MOUSEWHEEL:
+                old_zoom = zoom
+                zoom_factor = 1.1
+                if event.y > 0:
+                    zoom *= zoom_factor
+                else:
+                    zoom /= zoom_factor
+                
+                zoom = max(ZOOM_MIN, min(ZOOM_MAX, zoom))
+                cam_x = mx - (mx - cam_x) * zoom / old_zoom
+                cam_y = my - (my - cam_y) * zoom / old_zoom
 
         #drawing everything
-        screen.blit(grid_surf, (0, 0))
+        screen.fill(BGC)
+        draw_grid(screen, cam_x, cam_y, zoom)
 
         for (c, r) in state.walls:
-            draw_tile(screen, c, r, WALLC, font_label, None)
+            draw_tile(screen, c, r, WALLC, font_label, None, cam_x, cam_y, zoom)
         for (c, r) in state.spawn:
-            draw_tile(screen, c, r, SPAWNC, font_label, "S")
+            draw_tile(screen, c, r, SPAWNC, font_label, "S", cam_x, cam_y, zoom)
         for (c, r) in state.finish:
-            draw_tile(screen, c, r, FINISHC, font_label, "F")
-        if in_grid:
-            draw_hover(screen, hover_column, hover_row, active_tool)
+            draw_tile(screen, c, r, FINISHC, font_label, "F", cam_x, cam_y, zoom)
+        if in_grid and not panning:
+            draw_hover(screen, hover_column, hover_row, active_tool, cam_x, cam_y, zoom, font_label)
         
+        pygame.draw.rect(screen, BGC, (0, WIN_H - MENU_H, WIN_W, MENU_H))
         menu_rect = pygame.Rect(0, WIN_H - MENU_H, WIN_W, MENU_H)
         pygame.draw.rect(screen, MENUC, menu_rect)
         pygame.draw.line(screen, MENU_BORDERC, (0, WIN_H - MENU_H), (WIN_W, WIN_H - MENU_H), 1)
@@ -330,6 +376,7 @@ def main():
                  "CTRL + z to undo",
                  "Enter to print JSON file",
                  "Esc to quit"
+                 "scroll to zoom"
                 ]
         hx, hy = 24, WIN_H - MENU_H + 14
         for h in hints:
@@ -348,7 +395,7 @@ def main():
             screen.blit(coord, (WIN_W - coord.get_width() - 24, WIN_H - MENU_H + 46))
 
         pygame.display.flip()
-        clock.tick(90)
+        clock.tick(120)
 
     pygame.quit()
     sys.exit()
