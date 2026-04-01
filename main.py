@@ -5,7 +5,7 @@ import json
 #NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
 
 WIN_W, WIN_H = 1920, 1080
-MENU_H = 0 #it's supposed to be the toolbar but because of the unprecented amount of terms starting with "tool" all over this program as well as for the sake of this code's overall readability, I took the more or less wise decision to call it "menu" (it's just that my lazy ass can't write shit longer than 4 letters...) <- useless ahh comment just go to bed already aaaah t orange bouin
+MENU_H = 100 #it's supposed to be the toolbar but because of the unprecented amount of terms starting with "tool" all over this program as well as for the sake of this code's overall readability, I took the more or less wise decision to call it "menu" (it's just that my lazy ass can't write shit longer than 4 letters...) <- useless ahh comment just go to bed already aaaah t orange bouin
 ZOOM_MIN = 2.5
 ZOOM_MAX = 200
 ZOOM_DEFAULT = 40
@@ -124,7 +124,7 @@ def draw_grid(surf, cam_x, cam_y, zoom):
 
     alpha = min(255, int((zoom - 1)*20))
     grid_color = (*GRIDC, alpha)
-    grid_surface = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    grid_surface = pygame.Surface((WIN_W, WIN_H - MENU_H), pygame.SRCALPHA)
 
     col_start = int(-cam_x // zoom) - 1
     col_end = int((WIN_W - cam_x) // zoom) + 1
@@ -132,10 +132,12 @@ def draw_grid(surf, cam_x, cam_y, zoom):
     row_end = int((grid_h - cam_y) // zoom) + 1
     for c in range(col_start, col_end + 1):
         x = int(c*zoom + cam_x)
-        pygame.draw.line(grid_surface, grid_color, (x, 0), (x, grid_h))
+        pygame.draw.line(grid_surface, grid_color, (x, 0), (x, WIN_H - MENU_H))
+
     for r in range(row_start, row_end + 1):
         y = int(r*zoom + cam_y)
-        pygame.draw.line(grid_surface, grid_color, (0, y), (WIN_W, y))
+        if 0<= y <= WIN_H - MENU_H:
+            pygame.draw.line(grid_surface, grid_color, (0, y), (WIN_W, y))
     surf.blit(grid_surface, (0, 0))
 
 def draw_tile(surf, col, row, color, font, label, cam_x, cam_y, zoom, alpha=255):
@@ -163,6 +165,28 @@ def draw_hover(surf, col, row, tool, cam_x, cam_y, zoom, font):
     color = TOOL_COLORS.get(tool, BGC)
     label = {"spawn": "S", "finish": "F"}.get(tool)
     draw_tile(surf, col, row, color, font, label, cam_x, cam_y, zoom, alpha=100)
+
+def cells_between(c0, r0, c1, r1):  #Bresenham line algorithm magic stuff spewed by Claude cuz issue with tile placement at high speed
+        if c0 == c1 and r0 == r1:   #so no idea how it works but it does so let's move on
+            return [(c0, r0)]       #EDIT: It did, matter of fact, not work...
+        cells = []                  #Ok sorry mb I'm just autistic and replaced an < with an >
+        dc = abs(c1 - c0)           
+        dr = abs(r1 - r0)
+        sc = 1 if c0 < c1 else -1
+        sr = 1 if r0 < r1 else -1
+        err = dc - dr
+        while True:
+            cells.append((c0, r0))
+            if c0 == c1 and r0 == r1:
+                break
+            e2 = 2 * err
+            if e2 > -dr:
+                err -= dr
+                c0 += sc
+            if e2 < dc:
+                err += dc
+                r0 += sr
+        return cells
 
 
 class ToolButton:
@@ -208,6 +232,7 @@ class ToolButton:
         hint = font_small.render(key_hints[self.tool], True, TEXTBUTLESSVISIBLEC)
         surf.blit(hint, (self.rect.right - hint.get_width() - 10,
                          self.rect.top + 6))
+        
 
 # Okay, pause, u know what ?
 # let's take a quick break alr?
@@ -243,6 +268,8 @@ class ToolButton:
 
 
 def main():
+    import ctypes
+    ctypes.windll.user32.SetProcessDPIAware()
     pygame.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H))
     pygame.display.set_caption("Map Editor")
@@ -274,7 +301,6 @@ def main():
         ToolButton(start_x + i*spacing, menu_y + MENU_H//2, tool)
         for i, tool in enumerate(TOOLS)
     ]
-
 
     running = True
     while running:
@@ -329,10 +355,18 @@ def main():
             elif event.type == pygame.MOUSEMOTION:
                 cell = (hover_column, hover_row)
                 if painting and in_grid and cell != last_cell:
-                    state.apply_tool(hover_column, hover_row, active_tool)
+                    if last_cell:
+                        for (c, r) in cells_between(last_cell[0], last_cell[1], hover_column, hover_row):
+                            state.apply_tool(c, r, active_tool)
+                    else:
+                        state.apply_tool(hover_column, hover_row, active_tool)
                     last_cell = cell
                 elif erasing and in_grid and cell != last_cell:
-                    state.apply_tool(hover_column, hover_row, ERASE_TOOL)
+                    if last_cell:
+                        for (c, r) in cells_between(last_cell[0], last_cell[1], hover_column, hover_row):
+                            state.apply_tool(c, r, ERASE_TOOL)
+                    else:
+                        state.apply_tool(hover_column, hover_row, ERASE_TOOL)
                     last_cell = cell
                 elif panning:
                     cam_x = pan_origin[0] + (mx - pan_start[0])
@@ -384,8 +418,6 @@ def main():
                  "right click / drag to erase",
                  "CTRL + z to undo",
                  "Enter to print JSON file",
-                 "Esc to quit"
-                 "scroll to zoom"
                 ]
         hx, hy = 24, WIN_H - MENU_H + 14
         for h in hints:
