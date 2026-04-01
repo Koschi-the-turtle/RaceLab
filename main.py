@@ -1,5 +1,6 @@
 import pygame
 import sys
+import json
 
 #NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
 
@@ -109,6 +110,14 @@ class MapState:
             self.walls.discard((col, row))
             self.spawn.discard((col, row))
             self.finish.discard((col, row))
+    
+    def to_json(self):
+        return json.dumps({
+            "zoom_default": ZOOM_DEFAULT,
+            "walls": [list(t) for t in self.walls],
+            "spawn": [list(t) for t in self.spawn],
+            "finish": [list(t) for t in self.finish]
+        }, indent=2)
 
 def draw_grid(surf, cam_x, cam_y, zoom):
     grid_h = WIN_H - MENU_H
