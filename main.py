@@ -1,8 +1,13 @@
 import pygame
 import sys
 import json
+import math
 
 #NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
+
+def scale_image(img, factor):
+    size = round(img.get_width() * factor), round (img.get_height() * factor)
+    return pygame.transform.scale(img, size)
 
 WIN_W, WIN_H = 1920, 1080
 MENU_H = 100 #it's supposed to be the toolbar but because of the unprecented amount of terms starting with "tool" all over this program as well as for the sake of this code's overall readability, I took the more or less wise decision to call it "menu" (it's just that my lazy ass can't write shit longer than 4 letters...) <- useless ahh comment just go to bed already aaaah t orange bouin
@@ -25,9 +30,21 @@ NORMAL = (35, 40, 45)
 TEXTC = (210, 210,210)
 TEXTBUTLESSVISIBLEC = (110, 110, 110)
 
+CARC = (255, 220, 50) #temporary car color before I start adding actual sprites and a car selector or smth like that
+#TOTALYNOTAFERRARI = scale_image(pygame.image.load("pitstop_car_1.png"), 0.5)
+
+CAR_DEFS = [
+    {"name": "Not a Ferrari©", "file": "pitstop_car_1.png"},
+    {"name": "white pow(d)er", "file": "pitstop_car_2.png"},
+    {"name": "no joke here...", "file": "pitstop_car_3.png"},
+    {"name": "blue meth(anol)", "file": "pitstop_car_4.png"},
+    {"name": "oh a yellow car WAIT NO ARGH", "file": "pitstop_car_5.png"},
+    {"name": "Vorsprung durch Technik ?", "file": "pitstop_car_7.png"},
+    {"name": "Twitch's gambling cousin", "file": "pitstop_car_9.png"},
+    {"name": "Nike's mechanic uncle", "file": "pitstop_car_10.png"}
+]
 
 #Tools
-
 WALL_TOOL = "wall"
 ERASE_TOOL = "erase"
 SPAWN_TOOL = "spawn"
@@ -265,6 +282,168 @@ class ToolButton:
 
 #Ok back to work now
 
+class Car:
+    MAX_SPEED = 1000.0
+    ACCEL = 700.0
+    FRICTION = 180.0
+    TURN_SPEED = 4
+    SIZE = 0.6
+
+    def __init__(self, col, row, sprite = None):
+        self.x = (col + 0.5) * ZOOM_DEFAULT
+        self.y = (row + 0.5) * ZOOM_DEFAULT
+        self.angle = -math.pi/2
+        self.speed = 0.0
+        self.sprite = sprite
+    
+    def update(self, dt, walls):
+        keys = pygame.key.get_pressed()
+        accel_input = 0
+        if keys[pygame.K_UP] or keys[pygame.K_w]: accel_input = 1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: accel_input = -1
+        turn_input = 0
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: turn_input = -1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: turn_input = 1
+
+        if  accel_input != 0:
+            self.speed += accel_input * self.ACCEL * dt
+            self.speed = max(-self.MAX_SPEED * 0.5, min(self.MAX_SPEED, self.speed))
+        else:
+            if abs(self.speed) < self.FRICTION * dt:
+                self.speed = 0.0
+            else:
+                self.speed -= math.copysign(self.FRICTION * dt, self.speed)
+        speed_abs = abs(self.speed)
+        if speed_abs > 25:
+            speed_factor = (abs(self.speed)/self.MAX_SPEED)
+            turn_scale = 0.45 + 0.3* speed_factor
+            self.angle += turn_input * self.TURN_SPEED * dt *turn_scale * math.copysign(1, self.speed)
+
+        new_x = self.x + math.cos(self.angle) * self.speed * dt
+        new_y = self.y + math.sin(self.angle) * self.speed * dt
+
+        cos_a = math.cos(self.angle)
+        sin_a = math.sin(self.angle)
+        hw = self.SIZE * ZOOM_DEFAULT
+        hh = self.SIZE * ZOOM_DEFAULT * 0.6
+        corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+        
+        def corner_world(px, py, cx, cy):
+            return (px + cx * cos_a - cy * sin_a,
+                    py + cx * sin_a + cy * cos_a)
+        
+        def in_wall(wx, wy):
+            return (math.floor(wx / ZOOM_DEFAULT), math.floor(wy / ZOOM_DEFAULT)) in walls
+        
+        hitting = []
+        for cx, cy in corners:
+            wx, wy = corner_world(new_x, new_y, cx, cy)
+            if in_wall(wx, wy):
+                hitting.append((cx, cy))
+        if not hitting:
+            self.x = new_x
+            self.y = new_y
+        else:
+            self.speed = 0.0
+            hit_cx = [cx for cx, cy in hitting]
+            hit_cy = [cy for cx, cy in hitting]
+            block_x = all(c > 0 for c in hit_cx) or all(c < 0 for c in hit_cx)
+            block_y = all(c > 0 for c in hit_cy) or all(c < 0 for c in hit_cy)
+
+            if not block_x:
+                wx, wy = corner_world(new_x, self.y, hitting [0][0], hitting [0][1])
+                if not in_wall(wx, wy):
+                    self.x = new_x
+            if not block_y:
+                wx, wy = corner_world(self.x, new_y, hitting[0][0], hitting[0][1])
+                if not in_wall(wx, wy):
+                    self.y = new_y
+
+
+
+    def draw(self, surf, cam_x, cam_y, zoom):
+        scale = zoom / ZOOM_DEFAULT
+        sx = self.x * scale + cam_x
+        sy = self.y * scale + cam_y
+        hw = self.SIZE * zoom
+        hh = self.SIZE * zoom * 2
+
+        if self.sprite:
+            target_w = int(hw * 2)
+            target_h = int(hh * 2)
+            if target_w > 0 and target_h > 0:
+                scaled = pygame.transform.scale(self.sprite, (target_w, target_h))
+                angle_deg = -math.degrees(self.angle) + 90
+                rotated = pygame.transform.rotate(scaled, angle_deg)
+                rect = rotated.get_rect(center=(int(sx), int(sy)))
+                surf.blit(rotated, rect.topleft)
+        else:
+            corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+            cos_a = math.cos(self.angle)
+            sin_a = math.sin(self.angle)
+            rotated = [ 
+                (sx + x * cos_a - y * sin_a,
+                sy + x * sin_a + y * cos_a)
+                for x, y in corners
+            ]
+            pygame.draw.polygon(surf, CARC, rotated)
+            pygame.draw.polygon(surf, (180, 150, 20), rotated, 2)
+
+            front_x = sx + math.cos(self.angle) * hw
+            front_y = sy + math.sin(self.angle) * hw
+            pygame.draw.circle(surf, (50, 30, 10), (int(front_x), int(front_y)), max(2, int(hw*0.25)))
+
+def draw_select_popup(surf, car_defs, car_sprites, selected_idx, mouse_pos, font, font_small):
+    #dim bg
+    overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    surf.blit(overlay, (0, 0))
+    n = len(car_defs)
+    card_w = 160
+    card_h = 200
+    padding = 24
+    total_w = n * card_w + (n-1) * padding
+    panel_w = total_w + 80
+    panel_h = card_h + 120
+    panel_x = WIN_W //2 - panel_w // 2
+    panel_y = WIN_H // 2 - panel_h // 2
+    pygame.draw.rect(surf, (20, 24, 30), (panel_x, panel_y, panel_w, panel_h), border_radius=12)
+    pygame.draw.rect(surf, MENU_BORDERC, (panel_x, panel_y, panel_w, panel_h), width=1, border_radius=12)
+    title = font.render("Select you car", True, TEXTC)
+    surf.blit(title, (WIN_W //2 - title.get_width() // 2, panel_y + 16))
+    hint = font_small.render("Enter to confirm | Esc to cancel", True, TEXTBUTLESSVISIBLEC)
+    surf.blit(hint, (WIN_W //2 - hint.get_width() // 2, panel_y + panel_h - 24))
+    hovered_idx = None
+    cards_start_x = WIN_W // 2 - total_w // 2
+    cards_y = panel_y + 52
+    for i, car_def in enumerate(car_defs):
+        cx = cards_start_x + i * (card_w + padding)
+        card_r = pygame.Rect(cx, cards_y, card_w, card_h)
+        hovered = card_r.collidepoint(mouse_pos)
+        if hovered:
+            hovered_idx = i
+        
+        active = i == selected_idx
+        bg = ACTIVEC if active else (HOVERC if hovered else NORMAL)
+        border = SPAWNC if active else (MENU_BORDERC if not hovered else TEXTBUTLESSVISIBLEC)
+        bw = 2 if active else 1
+        pygame.draw.rect(surf, bg, card_r, border_radius=8)
+        pygame.draw.rect(surf, border, card_r, width=bw, border_radius=8)
+
+        #sprite preview
+        sprite = car_sprites[i]
+        if sprite:
+            prev_h = card_h - 50
+            prev_w = card_h // 2.4
+            scaled = pygame.transform.scale(sprite, (prev_w, prev_h))
+            rotated = pygame.transform.rotate(scaled, 90)
+            r = rotated.get_rect(center =(cx + card_w // 2, cards_y + (card_h - 36) // 2))
+            surf.blit(rotated, r.topleft)
+        else:
+            pygame.draw.rect(surf, CARC, (cx + 20, cards_y + 20, card_w - 40, card_h - 60), border_radius=4)
+        name_surf = font_small.render(car_def["name"], True, TEXTC if active else TEXTBUTLESSVISIBLEC)
+        surf.blit(name_surf, (cx + card_w // 2 - name_surf.get_width() // 2, cards_y + card_h - 28))
+    return hovered_idx
 
 
 def main():
@@ -280,6 +459,14 @@ def main():
     font_label = pygame.font.SysFont("segoeui", 14, bold=True)
     font_hint = pygame.font.SysFont("segoeui", 13)
 
+    car_sprites = []
+    for cd in CAR_DEFS:
+        try:
+            img = pygame.image.load(cd["file"]).convert_alpha()
+            car_sprites.append(img)
+        except:
+            car_sprites.append(None)
+
     state = MapState()
     active_tool = WALL_TOOL # default tool
     painting = False
@@ -291,6 +478,14 @@ def main():
     panning = False
     pan_start = None
     pan_origin = None
+
+    editor_cam = (cam_x, cam_y, zoom)
+    mode = "editor"
+    car = None
+    warning_msg = ""
+    warning_timer =0.0
+
+    selected_car_idx = 0
 
     menu_y = WIN_H - MENU_H
     n = len(TOOLS)
@@ -304,6 +499,7 @@ def main():
 
     running = True
     while running:
+        dt = min(clock.tick(120) / 1000.0, 0.05 )
         mouse_pos = pygame.mouse.get_pos()
         mx, my = mouse_pos
 
@@ -319,15 +515,62 @@ def main():
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    running = False
-                elif event.key in KEYS:
-                    active_tool = KEYS[event.key]
-                elif event.key == pygame.K_z and(event.mod & pygame.KMOD_CTRL):
-                    state.undo()
-                elif event.key == pygame.K_RETURN:
-                    print("Map JSON: \n", state.to_json()) #To do later, does nothing rn :|
+                    if mode == "select":
+                        mode = "editor"
+                    else:
+                        running = False
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+                elif event.key == pygame.K_TAB:
+                    if mode == "editor":
+                        if not state.spawn:
+                            warning_msg = "Place a spawn point first!"
+                            warning_timer = 2.5
+                        else:
+                            editor_cam = (cam_x, cam_y, zoom)
+                            mode = "select"
+
+                    elif mode == "select":
+                        col, row = next(iter(state.spawn))
+                        car = Car(col, row, sprite=car_sprites[selected_car_idx])
+                        zoom = float(ZOOM_DEFAULT)
+                        mode = "drive"
+
+                    else:
+                        mode = "editor"
+                        cam_x,cam_y, zoom = editor_cam
+                        car = None
+                
+                elif event.key == pygame.K_LEFT and mode == "select":
+                    selected_car_idx = (selected_car_idx - 1)%len(CAR_DEFS)
+                elif event.key == pygame.K_RIGHT and mode == "select":
+                    selected_car_idx = (selected_car_idx + 1)%len(CAR_DEFS)
+                elif event.key == pygame.K_RETURN and mode == "select":
+                    col, row = next(iter(state.spawn))
+                    car = Car(col, row, sprite=car_sprites[selected_car_idx])
+                    zoom = float(ZOOM_DEFAULT)
+                    mode = "drive"
+                
+                elif mode == "editor":
+                    if event.key in KEYS:
+                        active_tool = KEYS[event.key]
+                    elif event.key == pygame.K_z and(event.mod & pygame.KMOD_CTRL):
+                        state.undo()
+                    elif event.key == pygame.K_RETURN:
+                        print("Map JSON: \n", state.to_json()) #To do later, does nothing rn :|
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and mode == "select":
+                if event.button == 1:
+                    hovered = draw_select_popup(screen, CAR_DEFS, car_sprites, selected_car_idx, mouse_pos, font, font_small)
+                    if hovered is not None:
+                        if hovered == selected_car_idx:
+                            col, row = next(iter(state.spawn))
+                            car = Car(col, row, sprite=car_sprites[selected_car_idx])
+                            zoom = float(ZOOM_DEFAULT)
+                            mode = "drive"
+                        else:
+                            selected_car_idx = hovered
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and mode =="editor":
                 if event.button == 1:
                     clicked_btn = False
                     for btn in buttons:
@@ -352,7 +595,7 @@ def main():
                     pan_start = (mx, my)
                     pan_origin = (cam_x, cam_y)
                 
-            elif event.type == pygame.MOUSEMOTION:
+            elif event.type == pygame.MOUSEMOTION and mode == "editor":
                 cell = (hover_column, hover_row)
                 if painting and in_grid and cell != last_cell:
                     if last_cell:
@@ -372,7 +615,7 @@ def main():
                     cam_x = pan_origin[0] + (mx - pan_start[0])
                     cam_y = pan_origin[1] + (my - pan_start[1])
 
-            elif event.type == pygame.MOUSEBUTTONUP:
+            elif event.type == pygame.MOUSEBUTTONUP and mode == "editor":
                 if event.button == 1: 
                     painting = False
                 if event.button == 3: 
@@ -381,7 +624,7 @@ def main():
                 if event.button == 2:
                     panning = False
 
-            elif event.type == pygame.MOUSEWHEEL:
+            elif event.type == pygame.MOUSEWHEEL and mode == "editor":
                 old_zoom = zoom
                 zoom_factor = 1.1
                 if event.y > 0:
@@ -392,6 +635,12 @@ def main():
                 zoom = max(ZOOM_MIN, min(ZOOM_MAX, zoom))
                 cam_x = mx - (mx - cam_x) * zoom / old_zoom
                 cam_y = my - (my - cam_y) * zoom / old_zoom
+
+        if mode == "drive" and car:
+            car.update(dt, state.walls)
+            scale = zoom / ZOOM_DEFAULT
+            cam_x = WIN_W / 2 - car.x * scale
+            cam_y = (WIN_H - MENU_H) / 2 - car.y * scale
 
         #drawing everything
         screen.fill(BGC)
@@ -406,37 +655,64 @@ def main():
         if in_grid and not panning:
             draw_hover(screen, hover_column, hover_row, active_tool, cam_x, cam_y, zoom, font_label)
         
-        pygame.draw.rect(screen, BGC, (0, WIN_H - MENU_H, WIN_W, MENU_H))
+        
+        if mode == "editor" and in_grid and not panning:
+            draw_hover(screen, hover_column, hover_row, active_tool, cam_x, cam_y, zoom, font_label)
+
+        if mode == "drive" and car:
+            car.draw(screen, cam_x, cam_y, zoom)
+    
         menu_rect = pygame.Rect(0, WIN_H - MENU_H, WIN_W, MENU_H)
         pygame.draw.rect(screen, MENUC, menu_rect)
         pygame.draw.line(screen, MENU_BORDERC, (0, WIN_H - MENU_H), (WIN_W, WIN_H - MENU_H), 1)
 
-        for btn in buttons:
-            btn.draw(screen, active_tool, font, font_small)
+        if mode == "editor":
+            for btn in buttons:
+                btn.draw(screen, active_tool, font, font_small)
 
-        hints = ["left click / drag to place",
-                 "right click / drag to erase",
-                 "CTRL + z to undo",
-                 "Enter to print JSON file",
+            hints = ["left click to place | right click to erase",
+                 "middle mouse to pan | scroll to zoom",
+                 "CTRL + z to undo | Enter to print JSON file",
+                 "Tab to switch to drive mode | Esc to quit"
                 ]
-        hx, hy = 24, WIN_H - MENU_H + 14
-        for h in hints:
-            surf = font_hint.render(h, True, TEXTBUTLESSVISIBLEC)
-            screen.blit(surf, (hx, hy))
-            hy += 16
+            hx, hy = 24, WIN_H - MENU_H + 14
+            for h in hints:
+                surf = font_hint.render(h, True, TEXTBUTLESSVISIBLEC)
+                screen.blit(surf, (hx, hy))
+                hy += 16
 
-        #active tool indicator
-        tool_str = f"Tool: {LABEL[active_tool]}"
-        ts = font.render(tool_str, True, TOOL_COLORS[active_tool])
-        screen.blit(ts, (WIN_W - ts.get_width() - 24, WIN_H - MENU_H + 20))
+            #active tool indicator
+            tool_str = f"Tool: {LABEL[active_tool]}"
+            ts = font.render(tool_str, True, TOOL_COLORS[active_tool])
+            screen.blit(ts, (WIN_W - ts.get_width() - 24, WIN_H - MENU_H + 20))
 
-        #cell coord under cursor
-        if in_grid:
-            coord = font_hint.render(f"({hover_column}, {hover_row})", True, TEXTBUTLESSVISIBLEC)
-            screen.blit(coord, (WIN_W - coord.get_width() - 24, WIN_H - MENU_H + 46))
+            #cell coord under cursor
+            if in_grid:
+                coord = font_hint.render(f"({hover_column}, {hover_row})", True, TEXTBUTLESSVISIBLEC)
+                screen.blit(coord, (WIN_W - coord.get_width() - 24, WIN_H - MENU_H + 46))
 
+            if warning_timer > 0:
+                w = font.render(warning_msg, True, FINISHC)
+                screen.blit(w, (WIN_W // 2 - w.get_width()//2, WIN_H - MENU_H - 40))
+        
+        elif mode == "select":
+            draw_select_popup(screen, CAR_DEFS, car_sprites, selected_car_idx, mouse_pos, font, font_small)
+
+        else:
+            hints = [
+                "Arrow keys / WASD to drive",
+                "Tab to switch to editor mode | Esc to quit"
+            ]
+            hx, hy = 24, WIN_H - MENU_H + 22
+            for h in hints:
+                s = font_hint.render(h, True, TEXTBUTLESSVISIBLEC)
+                screen.blit(s, (hx, hy))
+                hy += 18
+            spd = font.render(f"Speed: {abs(int(car.speed))} px/s", True, TEXTC)
+            screen.blit(spd, (WIN_W - spd.get_width() - 24, WIN_H - MENU_H + 28))
+
+            
         pygame.display.flip()
-        clock.tick(120)
 
     pygame.quit()
     sys.exit()
