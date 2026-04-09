@@ -37,6 +37,9 @@ To drive, you can either use WASD or the arrow keys.
 I don't think you need to know anything else about driving, maybe just try not to hit walls, and yeah it seems logical, but it's actually because the collisions are still
 a bit messed up so you can get stuck and I mean really stuck sometimes.
 
+Oh I almost forgot but when you get your fastest time, for both sector time and lap time, the time turns purple. When it's better than the last lap, it's green, and if worse it's red.
+Just a simple color system from IRL racing to give you a bit more information about your performances.
+
 If you want to go back to editor mode, just press Tab
 
 # AI Training
