@@ -2,6 +2,7 @@ import pygame
 import sys
 import json
 import math
+import random
 
 #NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
 
@@ -37,6 +38,20 @@ CPC = (220,180, 40)
 BEST = (160, 80, 210) #purple if all-time best
 BETTER = (80, 200, 80) #green if better than previously
 BAD = (210, 60, 60) #red if worse than before
+
+#AI stuff
+POP_SIZE = 60
+GENERATIONS = 30
+SURVIVORS = 6 #number of AI kept per generations (the best ones of course)
+SIM_DT = 1/60 #simulation timestep (seconds)
+CP_TIMEOUT = 20.0 #time limit in seconds before the ai gets terminated between 2 spawn, finish or checkpoints
+AI_N_IN = 12 #9 raycasts + speed + angle-to-next-cp = 12 inputs
+AI_N_HID = 16
+AI_N_OUT = 2
+# Angles of the rays cast from the car (135° from the front in both directions -> total 270° with 90° blind spot at the rear)
+RAY_ANGLES = [-135, -105, -75, -45, -15, 0, 15, 45, 75, 105, 135] #11 rays but only 9 used
+RAY_ANGLES = list(range(-120, 121, 30)) #-120, -90, -60, -30, 0, 30, 60, 90, 120 -> 9 rays
+RAY_MAX = 20 #the ray's maximum distance in cells
 
 CAR_DEFS = [
     {"name": "Not a Ferrari©", "file": "pitstop_car_1.png"},
@@ -367,7 +382,30 @@ class Car:
         self.last_cell = None
         self.finished = False
         self.final_sector_time = []
-    
+        self.left_start = False #must leave spawn to before the lap, else when in loop mode with no checkpoint you complete laps just by staying on the spawn/finish point...
+        self._on_finish = True
+        self._on_cp = False
+
+    def _get_mask(self, zoom):
+            hw = self.SIZE * zoom
+            hh = self.SIZE * zoom * 2
+            if self.sprite:
+                target_w = max(1, int(hw * 2))
+                target_h = max(1, int(hh * 2))
+                scaled = pygame.transform.scale(self.sprite, (target_w, target_h))
+                angle_deg = -math.degrees(self.angle) + 90
+                rotated = pygame.transform.rotate(scaled, angle_deg)
+            else:
+                surf = pygame.Surface((max(1, int(hw * 2)), max(1, int(hh * 2))), pygame.SRCALPHA)
+                surf.fill((255, 255, 255))
+                cos_a = math.cos(self.angle)
+                sin_a = math.sin(self.angle)
+                corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+                pts = [(hw + x * cos_a - y * sin_a, hh + x * sin_a + y * cos_a) for x, y in corners]
+                pygame.draw.polygon(surf, (255, 255, 255, 255), pts)
+                rotated = surf
+            return pygame.mask.from_surface(rotated), rotated.get_rect()
+
     def update(self, dt, walls):
         if self.finished:
             return
@@ -398,22 +436,25 @@ class Car:
 
         cos_a = math.cos(self.angle)
         sin_a = math.sin(self.angle)
-        hw = self.SIZE * ZOOM_DEFAULT
-        hh = self.SIZE * ZOOM_DEFAULT * 0.6
+        hw = self.SIZE * ZOOM_DEFAULT * 1.6
+        hh = self.SIZE * ZOOM_DEFAULT * 0.8
         corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
-        
+
         def corner_world(px, py, cx, cy):
-            return (px + cx * cos_a - cy * sin_a,
-                    py + cx * sin_a + cy * cos_a)
+            return (px + cx * cos_a - cy * sin_a, py + cx * sin_a + cy * cos_a)
+
+        def cell_of(wx, wy):
+            return (math.floor(wx / ZOOM_DEFAULT), math.floor(wy / ZOOM_DEFAULT))
         
         def in_wall(wx, wy):
-            return (math.floor(wx / ZOOM_DEFAULT), math.floor(wy / ZOOM_DEFAULT)) in walls
-        
-        hitting = []
+            return cell_of(wx, wy) in walls
+    
+        hitting =[]
         for cx, cy in corners:
             wx, wy = corner_world(new_x, new_y, cx, cy)
             if in_wall(wx, wy):
                 hitting.append((cx, cy))
+        
         if not hitting:
             self.x = new_x
             self.y = new_y
@@ -423,9 +464,8 @@ class Car:
             hit_cy = [cy for cx, cy in hitting]
             block_x = all(c > 0 for c in hit_cx) or all(c < 0 for c in hit_cx)
             block_y = all(c > 0 for c in hit_cy) or all(c < 0 for c in hit_cy)
-
             if not block_x:
-                wx, wy = corner_world(new_x, self.y, hitting [0][0], hitting [0][1])
+                wx, wy = corner_world(new_x, self.y, hitting[0][0], hitting[0][1])
                 if not in_wall(wx, wy):
                     self.x = new_x
             if not block_y:
@@ -435,24 +475,50 @@ class Car:
         
         self.lap_time += dt
         self.sector_time += dt
-        cur_col = math.floor(self.x / ZOOM_DEFAULT)
-        cur_row = math.floor(self.y / ZOOM_DEFAULT)
-        cur_cell = (cur_col, cur_row)
 
-        if cur_cell != self.last_cell:
-            self.last_cell = cur_cell
+        scale = ZOOM_DEFAULT
+        sx = self.x
+        sy = self.y
+        car_mask, car_rect = self._get_mask(ZOOM_DEFAULT)
+        car_rect.center = (int(sx), int(sy))
 
-            if self.checkpoints and self.next_cp < len(self.checkpoints):
-                if cur_cell == self.checkpoints[self.next_cp]:
+        def overlaps_cell(col, row):
+            cell_x = col * ZOOM_DEFAULT
+            cell_y = row * ZOOM_DEFAULT
+            #offset between car mask origin and cell mask origin
+            ox = car_rect.left - cell_x
+            oy = car_rect.top - cell_y
+            cell_surf = pygame.Surface((ZOOM_DEFAULT, ZOOM_DEFAULT))
+            cell_mask = pygame.mask.from_surface(cell_surf)
+            return cell_mask.overlap(car_mask, (ox, oy)) is not None
+        
+        if self.checkpoints and self.next_cp < len(self.checkpoints):
+            cp_col, cp_row = self.checkpoints[self.next_cp]
+            if overlaps_cell(cp_col, cp_row):
+                if not getattr(self, '_on_cp', False):
                     self._complete_sector(self.next_cp)
                     self.next_cp += 1
-                    
-            if cur_cell in self.finish_cells:
-                all_cp_done = (not self.checkpoints) or (self.next_cp >= len(self.checkpoints))
-                if all_cp_done:
+                self._on_cp = True
+            else:
+                self._on_cp = False
+            
+        all_cp_done = not self.checkpoints or self.next_cp >= len(self.checkpoints)
+        if all_cp_done:
+            on_finish = any(overlaps_cell(fc, fr) for fc, fr in self.finish_cells)
+            if not self.left_start:
+                if not on_finish:
+                    self.left_start = True
+            elif on_finish and not getattr(self, '_on_finish', False):
+                if self.loop_map:
                     self._complete_lap()
-                    if not self.loop_map:
-                        self.finished = True
+                else:
+                    self._complete_sector(self.next_cp)
+                    self.last_lap = self.lap_time
+                    if self.best_lap is None or self.lap_time < self.best_lap:
+                        self.best_lap = self.lap_time
+                    self.finished = True
+            self._on_finish = on_finish
+
 
     def _complete_sector(self, idx):
         t = self.sector_time
@@ -672,53 +738,329 @@ def draw_results(surf, car, font, font_small, mouse_pos):
     
     return retry_rect, back_rect
 
-    overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, 160))
-    surf.blit(overlay, (0, 0))
-    n = len(car_defs)
-    card_w = 160
-    card_h = 200
-    padding = 24
-    total_w = n * card_w + (n-1) * padding
-    panel_w = total_w + 80
-    panel_h = card_h + 120
-    panel_y = WIN_W // 2 - panel_w // 2
-    pygame.draw.rect(surf, (20, 24, 30), (panel_x, panel_y, panel_w, panel_h), border_radius=12)
-    pygame.draw.rect(surf, MENU_BORDERC, (panel_x, panel_y, panel_w, panel_h), width=1, border_radius=12)
-    title = font.render("Select you car", True, TEXTC)
-    surf.blit(title, (WIN_W//2 - title.get_width()//2, panel_y + 16))
-    hint = font_small.render("Enter to confirm | Esc to cancel", True, TEXTBUTLESSVISIBLEC)
-    surf.blit(hint, (WIN_W //2 - hint.get_width() //2, panel_y + panel_h - 24))
-    hovered_idx = None
-    cards_start_x = WIN_W // 2 - total_w // 2
-    cards_y = panel_y + 52
-    for i, car_def in enumerate(car_defs):
-        cx = cards_start_x + i * (card_w + padding)
-        card_r = pygame.Rect(cx, cards_y, card_w, card_h)
-        hovered = card_r.collidepoint(mousepos)
-        if hovered:
-            hovered_idx = i
-
-        active = i == selected_idx
-        bg = ACTIVEC if active else (HOVERC if hovered else NORMAL)
-        border = SPAWNC if active else (MENU_BORDERC if not hovered else TEXTBUTLESSVISIBLEC)
-        bw = 2 if active else 1
-        pygame.draw.rect(surf, bg, card_r, border_radius=8)
-        pygame.draw.rect(sirf, border, card_r, width=bw, border_radius=8)
-    
-        sprite = car_sprites[i]
-        if sprite:
-            prev_h = card_h - 50
-            prec_w = card_h // 2.4
-            scaled = pygame.transform.scale(sprite, (prev_w, prev_h))
-            rotated = pygame.transform.rotate(scaled, 90)
-            r = rotated.get_rect(center=(cx + card_w //2, cards_y + (card_h - 36) // 2))
-            surf.blir(rotated, r.topleft)
+class NeuralNetwork:
+    def __init__(self, weights=None):
+        if weights is None:
+            self.w1 = [[random.uniform(-1, 1) for _ in range(AI_N_IN)] for _ in range(AI_N_HID)]
+            self.b1 = [random.uniform(-1, 1) for _ in range(AI_N_HID)]
+            self.w2 = [[random.uniform(-1, 1) for _ in range(AI_N_HID)] for _ in range(AI_N_OUT)]
+            self.b2 = [random.uniform(-1, 1) for _ in range(AI_N_OUT)]
         else:
-            pygame.draw.rect(surf, CARC, (cx + 20, cards_y + 20, card_w - 40, card_h - 60), border_radius=4)
-            name_surf = font_small.render(car_def["name"], True, TEXTC if active else TEXTBUTLESSVISIBLEC)
-            surf.blit(name_surf, (cx + card_w // 2 - name_surf.get_width() // 2, cards_y + card_h - 28))
-    return hovered_idx
+            self.w1, self.b1, self.w2, self.b2 = weights
+
+    def forward(self, inputs):
+        h = []
+        for i in range(AI_N_HID):
+            s = self.b1[i] + sum(self.w1[i][j] * inputs[j] for j in range(AI_N_IN))
+            h.append(math.tanh(s))
+        out = []
+        for i in range(AI_N_OUT):
+            s = self.b2[i] + sum(self.w2[i][j] * h[j] for j in range(AI_N_HID))
+            out.append(math.tanh(s))
+        steer = out[0]
+        throttle = (out[1] + 1) / 2
+        return steer, throttle
+
+    def mutate(self, rate=0.12):
+        def m(x): return x + random.gauss(0, 0.4) if random.random() < rate else x
+        self.w1 = [[m(x) for x in row] for row in self.w1]
+        self.b1 = [m(x) for x in self.b1]
+        self.w2 = [[m(x) for x in row] for row in self.w2]
+        self.b2 = [m(x) for x in self.b2]
+    
+    def crossover(self, other):
+        def cx(a, b): return a if random.random() < 0.5 else b
+        child = self.clone()
+        child.w1 = [[cx(self.w1[i][j], other.w1[i][j]) for j in range(AI_N_IN)] for i in range(AI_N_HID)]
+        child.b1 = [cx(self.b1[i], other.b1[i]) for i in range(AI_N_HID)]
+        child.w2 = [[cx(self.w2[i][j], other.w2[i][j]) for j in range(AI_N_HID)] for i in range(AI_N_OUT)]
+        child.b2 = [cx(self.b2[i], other.b2[i]) for i in range(AI_N_OUT)]
+        return child
+    
+    def clone(self):
+        return NeuralNetwork((
+            [row[:] for row in self.w1], self.b1[:],
+            [row[:] for row in self.w2], self.b2[:]
+        ))
+
+def ai_raycast(x, y, angle_rad, walls, max_cells=RAY_MAX):
+    step = ZOOM_DEFAULT * 0.25
+    max_dist = max_cells * ZOOM_DEFAULT
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    for d in range(1, int(max_dist / step) + 1):
+        dist = d * step
+        px = x + cos_a * dist
+        py = y + sin_a * dist
+        col = math.floor(px / ZOOM_DEFAULT)
+        row = math.floor(py / ZOOM_DEFAULT)
+        if (col, row) in walls:
+            return dist / max_dist
+    return 1.0
+
+def ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls):
+    rays = []
+    for deg in RAY_ANGLES:
+        ray_angle = angle + math.radians(deg)
+        rays.append(ai_raycast(x, y, ray_angle, walls))
+    if checkpoints and next_cp < len(checkpoints):
+        cp_col, cp_row = checkpoints[next_cp]
+        cp_x = (cp_col + 0.5) * ZOOM_DEFAULT
+        cp_y = (cp_row + 0.5) * ZOOM_DEFAULT
+        dx, dy = cp_x - x, cp_x - y
+        dist = math.hypot(dx, dy)
+        desired = math.atan2(dy, dx)
+        angle_err = ((desired - angle + math.pi) % (2 * math.pi) - math.pi) / math.pi
+        dist_norm = min(dist / (RAY_MAX * ZOOM_DEFAULT), 1.0)
+    else:
+        angle_err = 0.0
+        dist_norm = 0.0
+    
+    speed_norm = min(abs(speed) / Car.MAX_SPEED, 1.0)
+    return rays + [angle_err, dist_norm, speed_norm]
+
+def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, finish_cells, loop_map):
+    x = (spawn_col + 0.5) * ZOOM_DEFAULT
+    y = (spawn_row + 0.5) * ZOOM_DEFAULT
+    angle = math.radians(spawn_angle_deg)
+    speed = 0.0
+    next_cp = 0
+    fitness = 0.0
+    time_alive = 0.0
+    cp_timer = 0.0
+    left_start = False
+    on_finish = True
+    sector_times = []
+    sector_colors = []
+    sector_start = 0.0
+    history = [(x, y, angle)]
+    timing_history = [(0.0, 0, [], [])] #(lap_time, next_cp, sector_time, sector_colors)
+
+    hw = Car.SIZE * ZOOM_DEFAULT * 1.6
+    hh = Car.SIZE * ZOOM_DEFAULT * 0.8
+    corner_offsets = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+
+    def corner_world(px, py, cos_a, sin_a, cx, cy):
+        return (px + cx * cos_a - cy * sin_a, py + cx * sin_a + cy * cos_a)
+    
+    def cell_of(wx, wy):
+        return (math.floor(wx / ZOOM_DEFAULT), math.floor(wy / ZOOM_DEFAULT))
+    
+    def hits_wall(nx, ny, cos_a, sin_a):
+        for cx, cy in corner_offsets:
+            wx, wy = corner_world(nx, ny, cos_a, sin_a, cx, cy)
+            if cell_of(wx, wy) in walls:
+                return True
+        return False
+
+    if checkpoints:
+        cp0 = checkpoints[0]
+        best_dist = math.hypot(x - (cp0[0]+0.5)*ZOOM_DEFAULT, y - (cp0[1]+0.5)*ZOOM_DEFAULT)
+    else:
+        best_dist = 0.0
+
+    MAX_SIM_TIME = CP_TIMEOUT * (len(checkpoints) + 1) if checkpoints else CP_TIMEOUT
+
+    while time_alive < MAX_SIM_TIME:
+        inputs = ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls)
+        steer, throttle = nn.forward(inputs)
+
+        if abs(speed) > 25:
+            sf = abs(speed) / Car.MAX_SPEED
+            angle += steer * Car.TURN_SPEED * SIM_DT * (0.45 + 0.3 * sf) * math.copysign(1, speed)
+            
+        if throttle > 0.3:
+            speed += Car.ACCEL * SIM_DT
+        else:
+            if abs(speed) < Car.FRICTION * SIM_DT:
+                speed = 0.0
+            else:
+                speed -= math.copysign(Car.FRICTION * SIM_DT, speed)
+        speed = max(-Car.MAX_SPEED * 0.5, min(Car.MAX_SPEED, speed))
+
+        new_x = x + math.cos(angle) * speed * SIM_DT
+        new_y = y + math.sin(angle) * speed * SIM_DT
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        if hits_wall(new_x, new_y, cos_a, sin_a):
+            fitness -= 500
+            break
+
+        x, y = new_x, new_y
+        time_alive += SIM_DT
+        cp_timer += SIM_DT
+        fitness += max(speed, 0) * SIM_DT * 0.1
+        history.append((x, y, angle))
+        timing_history.append((time_alive, next_cp, list(sector_times), list(sector_colors)))
+        if checkpoints and next_cp < len(checkpoints):
+            cp_col, cp_row = checkpoints[next_cp]
+            cp_x = (cp_col + 0.5) * ZOOM_DEFAULT
+            cp_y = (cp_row + 0.5) * ZOOM_DEFAULT
+            dist_now = math.hypot(x - cp_x, y - cp_y)
+
+            if dist_now < best_dist:
+                fitness += (best_dist - dist_now) * 2.0
+                best_dist = dist_now
+
+            if dist_now < ZOOM_DEFAULT * 1.2:
+                fitness += 2000
+                t_sec = time_alive - sector_start
+                sector_start = time_alive
+                if sector_times and t_sec < min(sector_times):
+                    sector_colors.append(BEST)
+                elif sector_times:
+                    sector_colors.append(BETTER if t_sec < sector_times[-1] else BAD)
+                else:
+                    sector_colors.append(BETTER)
+                sector_times.append(t_sec)
+                next_cp += 1
+                cp_timer = 0.0
+                if next_cp < len(checkpoints):
+                    nc = checkpoints[next_cp]
+                    best_dist = math.hypot(x - (nc[0]+0.5) * ZOOM_DEFAULT, y - (nc[1]+0.5)*ZOOM_DEFAULT)
+
+        if cp_timer > CP_TIMEOUT:
+            break
+
+        all_cp_done = not checkpoints or next_cp > len(checkpoints)
+        if all_cp_done and finish_cells:
+            cur_cell = cell_of(x, y)
+            if not left_start:
+                if cur_cell not in finish_cells:
+                    left_start = True
+            elif cur_cell in finish_cells and not on_finish:
+                fitness += 10000
+                fitness -= time_alive * 5
+                break
+            on_finish = cur_cell in finish_cells
+
+    return fitness, history, timing_history
+
+def draw_training_screen(screen, font, font_small, gen, total_gens, best_fitness, log, cancel_rect, watch_buttons):
+    screen.fill(BGC)
+    title = font.render("Training AI..", True, TEXTC)
+    screen.blit(title, (WIN_W // 2 - title.get_width() // 2, 40))
+    if gen >= 0:
+        prog = font_small.render(f"Generation {gen + 1} / {total_gens}", True, TEXTBUTLESSVISIBLEC)
+        screen.blit(prog, (WIN_W // 2 - prog.get_width() // 2, 80))
+        bar_w = int((gen + 1) / total_gens * 600)
+        pygame.draw.rect(screen, (50, 55, 60), (WIN_W // 2 - 300, 110, 600, 16), border_radius=4)
+        pygame.draw.rect(screen, BETTER, (WIN_W // 2 - 300, 110, bar_w, 16), border_radius=4)
+        fit = font_small.render(f"Best fitness: {best_fitness:.0f}", True, BETTER)
+        screen.blit(fit, (WIN_W // 2 - fit.get_width() // 2, 138))
+
+        #log list
+        y = 180
+        for entry in log:
+            g, f, has_watch = entry
+            row_text = f"Gen {g+1:>3} - fitness {f:.0f}"
+            col = BETTER if f == max(e[1] for e in log) else TEXTBUTLESSVISIBLEC
+            s = font_small.render(row_text, True, col)
+            screen.blit(s, (WIN_W // 2 - 260, y))
+
+            btn_rect = watch_buttons.get(g)
+            if btn_rect:
+                hovered = btn_rect.collidepoint(pygame.mouse.get_pos())
+                pygame.draw.rect(screen, HOVERC if hovered else NORMAL, btn_rect, border_radius =3)
+                pygame.draw.rect(screen, MENU_BORDERC, btn_rect, width=1, border_radius = 3)
+                lbl = font_small.render("Watch", True, TEXTC)
+                screen.blit(lbl, (btn_rect.centerx - lbl.get_width() // 2, btn_rect.centery - lbl.get_height() // 2))
+
+            y += 26
+            if y > WIN_H - 120:
+                break
+
+        hovered = cancel_rect.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(screen, BAD if hovered else NORMAL, cancel_rect, border_radius = 8)
+        pygame.draw.rect(screen, BAD, cancel_rect, width = 1, border_radius = 8)
+        lbl = font.render("Cancel training", True, TEXTC)
+        screen.blit(lbl, (cancel_rect.centerx - lbl.get_width() // 2, cancel_rect.centery - lbl.get_height() // 2))
+        hint = font_small.render("Training runs headlessly - click  Watch  to replay any generation's best run", True, TEXTBUTLESSVISIBLEC)
+        screen.blit(hint, (WIN_W // 2 - hint.get_width() // 2, WIN_H - 40))
+        pygame.display.flip()
+
+def run_replay(screen, clock, font, font_small, history, timing_history, gen_num, walls, checkpoints, finish_cells, cam_x, cam_y, zoom):
+    running = True
+    frame = 0
+    while running and frame < len(history):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                return True
+        
+        x, y, angle = history[frame]
+        if frame < len(timing_history):
+            lap_t, n_cp, s_times, s_colors = timing_history[frame]
+        else:
+            lap_t, n_cp, s_times, s_colors = 0.0, 0, [], []
+        frame += 1
+        scale = zoom / ZOOM_DEFAULT
+        cam_x = WIN_W / 2 - x * scale
+        cam_y = (WIN_H - MENU_H) / 2 - y * scale
+        screen.fill(BGC)
+        draw_grid(screen, cam_x, cam_y, zoom)
+        for (c, r) in walls:
+            draw_tile(screen, c, r, WALLC, font_small, None, cam_x, cam_y, zoom)
+        for (c, r) in finish_cells:
+            draw_tile(screen, c, r, FINISHC, font_small, "F", cam_x, cam_y, zoom)
+        for idx, (c, r) in enumerate(checkpoints):
+            draw_tile(screen, c, r, CPC, font_small, str(idx + 1), cam_x, cam_y, zoom)
+
+        #draw agent (just a rectangle)
+        s_x = x * scale + cam_x
+        s_y = y * scale + cam_y
+        hw = Car.SIZE * zoom * 1.6
+        hh = Car.SIZE * zoom * 0.8
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        corners_s = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+        pts = [(s_x + cx * cos_a - cy * sin_a, s_y + cx * sin_a + cy * cos_a) for cx, cy in corners_s]
+        pygame.draw.polygon(screen, BEST, pts)
+        pygame.draw.polygon(screen, (255, 255, 255), pts, 1)
+        lbl = font_small.render(str(gen_num + 1), True, (255, 255, 255))
+        screen.blit(lbl, (int(s_x) - lbl.get_width() // 2, int(s_y) - lbl.get_height() // 2))
+        
+        hud_x, hud_y = 24, 24
+        pad = 6
+        hud_lines = [
+            (f"Time: {fmt_time(lap_t)}", TEXTC),
+            (f"Last lap: --:--.---", TEXTBUTLESSVISIBLEC),
+            (f"Best lap: --:--.---", TEXTBUTLESSVISIBLEC)
+        ]
+        total_sectors = len(checkpoints) + 1
+        for i in range(total_sectors):
+            if i < len(s_colors):
+                col = s_colors[i]
+            elif i == n_cp:
+                col = TEXTC
+            else:
+                col = TEXTBUTLESSVISIBLEC
+            t_str = fmt_time(s_times[i]) if i < len(s_times) else "--:--.---"
+            hud_lines.append((f"S{i+1} {t_str}", col))
+        bg_w = 280
+        bg_h = len(hud_lines)* 22 + pad * 2
+        bg = pygame.Surface((bg_w, bg_h), pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 140))
+        screen.blit(bg, (hud_x - pad, hud_y - pad))
+        for text, col, in hud_lines:
+            s = font_small.render(text, True, col)
+            screen.blit(s, (hud_x, hud_y))
+            hud_y += 22
+        
+        pygame.draw.rect(screen, MENUC, (0, WIN_H - MENU_H, WIN_W, MENU_H))
+        pygame.draw.rect(screen, MENU_BORDERC, (0, WIN_H - MENU_H, WIN_W, WIN_H - MENU_H), 1)
+        info = font_small.render(f"Replaying Gen {gen_num + 1} - Esc to stop", True, TEXTBUTLESSVISIBLEC)
+        screen.blit(info, (24, WIN_H - MENU_H + 20))
+        elapsed = frame * SIM_DT
+        time_s = font_small.render(f"GEN {gen_num + 1} - Time: {fmt_time(elapsed)}", True, TEXTC)
+        screen.blit(time_s, (WIN_W // 2 - time_s.get_width() // 2, 20))
+        pygame.display.flip()
+        clock.tick(120)
+
+    return True
+
+        
+
 
 def make_car(state, car_sprites, selected_car_idx):
     col, row = next(iter(state.spawn))
@@ -765,6 +1107,12 @@ def main():
     selected_car_idx = 0
     r_held = False
 
+    ai_log = [] #list of gen, fitness has_history
+    ai_histories = {} # gen -> history list
+    ai_watch_btns = {} # gen _> pygame.Rect (built during draw)
+    ai_cancelled = False
+    ai_training_active = False
+
     menu_y = WIN_H - MENU_H
     n = len(TOOLS)
     spacing = 180
@@ -804,6 +1152,10 @@ def main():
                         mode = "editor"
                         cam_x, cam_y, zoom = editor_cam
                         car = None
+                    elif mode == "training":
+                        ai_cancelled = True
+                        mode = "editor"
+                        cam_x, cam_y, zoom = editor_cam
                     else:
                         running = False
 
@@ -855,6 +1207,18 @@ def main():
                         state.undo()
                     elif event.key == pygame.K_RETURN:
                         print("Map JSON: \n", state.to_json()) #To do later, does nothing rn :|
+
+                    elif event.key == pygame.K_t:
+                        if not state.spawn:
+                            warning_msg = "Place a spawn point first!"
+                            warnin_timer = 2.5
+                        else:
+                            editor_cam = (cam_x, cam_y, zoom)
+                            ai_log = []
+                            ai_histories = {}
+                            ai_watch_btns = {}
+                            ai_cancelled = False
+                            mode = "training"
 
             elif event.type == pygame.MOUSEBUTTONDOWN and mode == "select":
                 if event.button == 1:
@@ -937,6 +1301,61 @@ def main():
                     else:
                         zoom /= zoom_factor
                 
+
+        if mode == "training" and not ai_cancelled:
+            gen = len(ai_log)
+            if gen < GENERATIONS:
+                if gen == 0:
+                    population = [NeuralNetwork() for _ in range(POP_SIZE)]
+                else:
+                    population = ai_histories.get('_population', [NeuralNetwork() for _ in range(POP_SIZE)])
+                spawn_col, spawn_row = next(iter(state.spawn))
+                scored = []
+                for nn in population:
+                    for event in pygame.event.get():
+                        if event.type == pygame.QUIT:
+                            running = False
+                            ai_cancelled = True
+                            break
+                        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                            ai_cancelled = True
+                            break
+                        if event.type == pygame.MOUSEBUTTONDOWN:
+                            cancel_rect = pygame.Rect(WIN_W // 2 - 120, WIN_H -100, 240, 44)
+                            if cancel_rect.collidepoint(event.pos):
+                                break
+                    if ai_cancelled:
+                        break
+                    fit, hist, t_hist = ai_simulate(nn, spawn_col, spawn_row, state.spawn_angle, state.walls, list(state.checkpoints), set(state.finish), state.is_loop())
+                    scored.append((fit, nn, hist, t_hist))
+
+                if not ai_cancelled:
+                    scored.sort(key=lambda x: x[0], reverse = True)
+                    best_fit, best_nn_this_gen, best_hist, best_t_hist = scored[0]
+                    ai_log.append((gen, best_fit, True))
+                    ai_histories[gen] = (best_hist, best_t_hist)
+                    survivors = [nn for _, nn, _, _ in scored[:SURVIVORS]]
+                    weights = [SURVIVORS - i for i in range(SURVIVORS)]
+                    new_pop = [scored[0][1].clone()]
+                    stale = len(ai_log) > 5 and all(abs(ai_log[-i][1] - best_fit) < 50 for i in range(1, 6))
+                    while len(new_pop) < POP_SIZE:
+                        pa = random.choices(survivors, weights = weights, k=1)[0]
+                        pb = random.choices(survivors, weights = weights, k=1)[0]
+                        child = pa.crossover(pb) if pa is not pb else pa.clone()
+                        child.mutate(rate=0.20 if stale else 0.12)
+                        new_pop.append(child)
+                    ai_histories['_population'] = new_pop
+                    ai_watch_btns = {}
+                    y_btn = 180
+                    for entry in ai_log:
+                        g = entry[0]
+                        ai_watch_btns[g] = pygame.Rect(WIN_W // 2 + 80, y_btn, 80, 22)
+                        y_btn += 26
+                        if y_btn > WIN_H - 120:
+                            break
+            else:
+                pass
+        
 
         if mode == "drive" and car:
             car.update(dt, state.walls)
@@ -1037,6 +1456,23 @@ def main():
                         cam_x, cam_y, zoom = editor_cam
                         car = None
 
+        elif mode == "training":
+            gen_done = len(ai_log)
+            best_fit = ai_log[-1][1] if ai_log else 0.0
+            cancel_rect = pygame.Rect(WIN_W // 2 - 120, WIN_H - 86, 240, 44)
+            draw_training_screen(screen, font, font_small, gen_done - 1, GENERATIONS, best_fit, ai_log, cancel_rect, ai_watch_btns)
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.button == 1:
+                    if cancel_rect.collidepoint(event.pos):
+                        ai_cancelled = True
+                        mode = "editor"
+                        cam_x, cam_y, zoom = editor_cam
+                    else:
+                        for g, btn_rect in ai_watch_btns.items():
+                            if btn_rect.collidepoint(event.pos) and g in ai_histories:
+                                hist, t_hist = ai_histories[g]
+                                run_replay(screen, clock, font, font_small, hist, t_hist, g, state.walls, list(state.checkpoints), set(state.finish), cam_x, cam_y, zoom)
+                                break
 
         else:
             hints = [
