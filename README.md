@@ -23,6 +23,7 @@ Things you should be aware of when making your map:
  - I recommend you test your track yourself before training the AI on it just to be sure it's clean and all
  - Oh and also btw you can Ctrl - Z if you want
 
+To close the game, press Esc
 To switch to driving mode, just press Tab
 
 # Driving
