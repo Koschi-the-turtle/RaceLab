@@ -175,7 +175,9 @@ class MapState:
             "zoom_default": ZOOM_DEFAULT,
             "walls": [list(t) for t in self.walls],
             "spawn": [list(t) for t in self.spawn],
-            "finish": [list(t) for t in self.finish]
+            "finish": [list(t) for t in self.finish],
+            "checkpoints": [list(t) for t in self.checkpoints],
+            "spawn_angle": self.spawn_angle,
         }, indent=2)
 
 def draw_grid(surf, cam_x, cam_y, zoom):
@@ -1059,8 +1061,76 @@ def run_replay(screen, clock, font, font_small, history, timing_history, gen_num
 
     return True
 
-        
+def export_map(state):
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.wm_attributes("-topmost", True)
+    path = filedialog.asksaveasfilename(
+        defaultextension = "json",
+        filetypes = [("JSON map files", "*.json")],
+        title = "Export map"
+    )
+    root.destroy()
+    if path:
+        with open(path, "w") as f:
+            f.write(state.to_json())
+        return True
+    return False
 
+def import_map(state):
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.wm_attributes("-topmost", True)
+    path = filedialog.askopenfilename(
+        filetypes = [("JSON map files", "*.json")],
+        title = "Import map"
+    )
+    root.destroy()
+    if not path:
+        return False
+    with open(path) as f:
+        data = json.load(f)
+        state.walls = {tuple(t) for t in data.get("walls", [])}
+        state.spawn = {tuple(t) for t in data.get("spawn", [])}
+        state.finish = {tuple(t) for t in data.get("finish", [])}
+        state.checkpoints = [tuple(t) for t in data.get("checkpoints", [])]
+        state.spawn_angle = data.get("spawn_angle", 0.0)
+        state.history = []
+        return True
+    
+def draw_io_popup(surf, font, font_small, mouse_pos):
+    overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 160))
+    surf.blit(overlay, (0, 0))
+    panel_w, panel_h = 400, 200
+    panel_x = WIN_W // 2 - panel_w // 2
+    panel_y = WIN_H // 2 - panel_h // 2
+    pygame.draw.rect(surf, (20, 24, 30), (panel_x, panel_y, panel_w, panel_h), border_radius = 12)
+    title = font.render("Map file", True, TEXTC)
+    surf.blit(title, (WIN_W // 2 - title.get_width() // 2, panel_y + 20))
+    hint = font_small.render("Esc to cancel", True, TEXTBUTLESSVISIBLEC)
+    surf.blit(hint, (WIN_W // 2 - hint.get_width() // 2, panel_y + panel_x - 24))
+
+    btn_w, btn_h = 140, 50
+    gap = 20
+    export_rect = pygame.Rect(WIN_W // 2 - btn_w - gap // 2, panel_y + 80, btn_w, btn_h)
+    import_rect = pygame.Rect(WIN_W // 2 + gap // 2, panel_y + 80, btn_w, btn_h)
+
+    for rect, label, sub in [
+        (export_rect, "Export", "save to file"),
+        (import_rect, "Import", "load from file")
+    ]:
+        hovered = rect.collidepoint(mouse_pos)
+        pygame.draw.rect(surf, HOVERC if hovered else NORMAL, rect, border_radius = 8)
+        pygame.draw.rect(surf, MENU_BORDERC, rect, width = 1, border_radius = 8)
+        lbl = font.render(label, True, TEXTC)
+        sub_s = font_small.render(sub, True, TEXTBUTLESSVISIBLEC)
+        surf.blit(lbl, (rect.centerx - lbl.get_width() // 2, rect.centery - lbl.get_height() // 2 - 8))
+        surf.blit(sub_s, (rect.centerx - sub_s.get_width() // 2, rect.centery + 6))
+
+    return export_rect, import_rect
 
 def make_car(state, car_sprites, selected_car_idx):
     col, row = next(iter(state.spawn))
@@ -1156,6 +1226,8 @@ def main():
                         ai_cancelled = True
                         mode = "editor"
                         cam_x, cam_y, zoom = editor_cam
+                    elif mode == "io_popup":
+                        mode = "editor"
                     else:
                         running = False
 
@@ -1206,7 +1278,7 @@ def main():
                     elif event.key == pygame.K_z and(event.mod & pygame.KMOD_CTRL):
                         state.undo()
                     elif event.key == pygame.K_RETURN:
-                        print("Map JSON: \n", state.to_json()) #To do later, does nothing rn :|
+                        mode = "io_popup"
 
                     elif event.key == pygame.K_t:
                         if not state.spawn:
@@ -1473,6 +1545,21 @@ def main():
                                 hist, t_hist = ai_histories[g]
                                 run_replay(screen, clock, font, font_small, hist, t_hist, g, state.walls, list(state.checkpoints), set(state.finish), cam_x, cam_y, zoom)
                                 break
+            
+        elif mode == "io_popup":
+            export_rect, import_rect = draw_io_popup(screen, font, font_small, mouse_pos)
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.button == 1:
+                    if export_rect.collidepoint(event.pos):
+                        export_map(state)
+                        mode = "editor"
+                    elif import_rect.collidepoint(event.pos):
+                        if import_map(state):
+                            if state.spawn:
+                                sc, sr = next(iter(state.spawn))
+                                cam_x = WIN_W / 2 - (sc + 0.5) * ZOOM_DEFAULT * (zoom / ZOOM_DEFAULT)
+                                cam_y = WIN_H / 2 - (sr + 0.5) * ZOOM_DEFAULT * (zoom / ZOOM_DEFAULT)
+                        mode = "editor"
 
         else:
             hints = [
