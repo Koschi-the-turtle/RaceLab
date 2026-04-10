@@ -53,8 +53,10 @@ For your information, the game window might not react for a while, until the fir
 you'll see the generation's fintess as well as a "watch" button on the side, don't press it until all generations are finished so after the training is complete.
 Then you can watch each generation's best run and compare their performance.
 
-# JSON Map export/import - FUNCTIONALITY IN CONSTRUCTION
+# JSON Map export/import
 
-After you're done making your lap, or whenever you want honestly, you can press Enter in editor mode to create a Json file based on your map.
-For now it's in the terminal so you won't get it so yeah forget about it (kind of)
-And you can't import a map right now, I'll see if I can do that later on, it'd be way easier for demo users to play a pre-made map directly
+While in editor mode, you can export or import a map at any time. Just press Enter, and a popup will appear. Select export to convert your current map to a Json file, or select import to load an already finished map from your file explorer.
+
+https://github.com/user-attachments/assets/dcc29397-f018-4250-b9c2-8eb69c1e6ca5
+
+
