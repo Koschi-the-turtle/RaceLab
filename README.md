@@ -53,6 +53,8 @@ For your information, the game window might not react for a while, until the fir
 you'll see the generation's fintess as well as a "watch" button on the side, don't press it until all generations are finished so after the training is complete.
 Then you can watch each generation's best run and compare their performance.
 
+Currently the AI tranining is set to 50 generations with a population of 200 cars, from which the 25 best will be kept to create the other generations of AI, while mutating each a little at a rate of 0.15.
+
 # JSON Map export/import
 
 While in editor mode, you can export or import a map at any time. Just press Enter, and a popup will appear. Select export to convert your current map to a Json file, or select import to load an already finished map from your file explorer.
