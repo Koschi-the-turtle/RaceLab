@@ -4,7 +4,7 @@ import json
 import math
 import random
 
-#NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm too lazy for that
+#NOTICE: This program has been victim of mass restructuration and has now become a complete mess, now I hear you wonder : "Will he fix this ?", absolutely not you dumbfuck I'm way too lazy for that
 
 def scale_image(img, factor):
     size = round(img.get_width() * factor), round (img.get_height() * factor)
@@ -40,11 +40,11 @@ BETTER = (80, 200, 80) #green if better than previously
 BAD = (210, 60, 60) #red if worse than before
 
 #AI stuff
-POP_SIZE = 60
-GENERATIONS = 30
-SURVIVORS = 6 #number of AI kept per generations (the best ones of course)
+POP_SIZE = 200
+GENERATIONS = 50
+SURVIVORS = 25 #number of AI kept per generations (the best ones of course)
 SIM_DT = 1/60 #simulation timestep (seconds)
-CP_TIMEOUT = 20.0 #time limit in seconds before the ai gets terminated between 2 spawn, finish or checkpoints
+CP_TIMEOUT = 7.0 #time limit in seconds before the ai gets terminated between 2 spawn, finish or checkpoints
 AI_N_IN = 12 #9 raycasts + speed + angle-to-next-cp = 12 inputs
 AI_N_HID = 16
 AI_N_OUT = 2
@@ -56,7 +56,7 @@ RAY_MAX = 20 #the ray's maximum distance in cells
 CAR_DEFS = [
     {"name": "Not a Ferrari©", "file": "pitstop_car_1.png"},
     {"name": "white pow(d)er", "file": "pitstop_car_2.png"},
-    {"name": "no joke here...", "file": "pitstop_car_3.png"},
+    {"name": "i'M bATmAn...", "file": "pitstop_car_3.png"},
     {"name": "blue meth(anol)", "file": "pitstop_car_4.png"},
     {"name": "oh a yellow car WAIT NO ARGH", "file": "pitstop_car_5.png"},
     {"name": "Vorsprung durch Technik ?", "file": "pitstop_car_7.png"},
@@ -763,7 +763,7 @@ class NeuralNetwork:
         throttle = (out[1] + 1) / 2
         return steer, throttle
 
-    def mutate(self, rate=0.12):
+    def mutate(self, rate=0.15):
         def m(x): return x + random.gauss(0, 0.4) if random.random() < rate else x
         self.w1 = [[m(x) for x in row] for row in self.w1]
         self.b1 = [m(x) for x in self.b1]
@@ -800,17 +800,31 @@ def ai_raycast(x, y, angle_rad, walls, max_cells=RAY_MAX):
             return dist / max_dist
     return 1.0
 
-def ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls):
+def ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls, finish_cells):
     rays = []
     for deg in RAY_ANGLES:
         ray_angle = angle + math.radians(deg)
         rays.append(ai_raycast(x, y, ray_angle, walls))
+
+    all_cp_done = not checkpoints or next_cp >= len(checkpoints)
+
     if checkpoints and next_cp < len(checkpoints):
+        #points toward next checkpoint
         cp_col, cp_row = checkpoints[next_cp]
-        cp_x = (cp_col + 0.5) * ZOOM_DEFAULT
-        cp_y = (cp_row + 0.5) * ZOOM_DEFAULT
-        dx, dy = cp_x - x, cp_x - y
-        dist = math.hypot(dx, dy)
+        tx = (cp_col + 0.5) * ZOOM_DEFAULT
+        ty = (cp_row + 0.5) * ZOOM_DEFAULT
+    
+    elif all_cp_done and finish_cells:
+        #points toward finish point when all checkpoints got reached
+        fc, fr  = next(iter(finish_cells))
+        tx = (fc + 0.5) * ZOOM_DEFAULT
+        ty = (fr + 0.5) * ZOOM_DEFAULT
+    else:
+        tx, ty = x, y #no target
+
+    dx, dy = tx - x, ty - y
+    dist = math.hypot(dx, dy)
+    if dist > 0:
         desired = math.atan2(dy, dx)
         angle_err = ((desired - angle + math.pi) % (2 * math.pi) - math.pi) / math.pi
         dist_norm = min(dist / (RAY_MAX * ZOOM_DEFAULT), 1.0)
@@ -835,6 +849,7 @@ def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, f
     sector_times = []
     sector_colors = []
     sector_start = 0.0
+    completed_lap_time = None
     history = [(x, y, angle)]
     timing_history = [(0.0, 0, [], [])] #(lap_time, next_cp, sector_time, sector_colors)
 
@@ -864,7 +879,7 @@ def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, f
     MAX_SIM_TIME = CP_TIMEOUT * (len(checkpoints) + 1) if checkpoints else CP_TIMEOUT
 
     while time_alive < MAX_SIM_TIME:
-        inputs = ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls)
+        inputs = ai_build_inputs(x, y, angle, speed, checkpoints, next_cp, walls, finish_cells)
         steer, throttle = nn.forward(inputs)
 
         if abs(speed) > 25:
@@ -885,15 +900,21 @@ def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, f
         cos_a, sin_a = math.cos(angle), math.sin(angle)
 
         if hits_wall(new_x, new_y, cos_a, sin_a):
-            fitness -= 500
+            fitness -= 800 #I'm too lazy to make the AI able to reverse so it just dies when it crahes :|
             break
 
         x, y = new_x, new_y
         time_alive += SIM_DT
         cp_timer += SIM_DT
-        fitness += max(speed, 0) * SIM_DT * 0.1
         history.append((x, y, angle))
         timing_history.append((time_alive, next_cp, list(sector_times), list(sector_colors)))
+        
+        cos_a_now,sin_a_now = math.cos(angle), math.sin(angle)
+        car_cells = set()
+        for cx, cy in corner_offsets:
+            wx, wy = corner_world(x, y, cos_a_now, sin_a_now, cx, cy)
+            car_cells.add(cell_of(wx, wy))
+        
         if checkpoints and next_cp < len(checkpoints):
             cp_col, cp_row = checkpoints[next_cp]
             cp_x = (cp_col + 0.5) * ZOOM_DEFAULT
@@ -901,11 +922,11 @@ def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, f
             dist_now = math.hypot(x - cp_x, y - cp_y)
 
             if dist_now < best_dist:
-                fitness += (best_dist - dist_now) * 2.0
+                fitness += (best_dist - dist_now) * 2 #the further you go the better, at least at the beginning so that the AI doesn't just afk in the middle of the road
                 best_dist = dist_now
 
-            if dist_now < ZOOM_DEFAULT * 1.2:
-                fitness += 2000
+            if (cp_col, cp_row) in car_cells:
+                fitness += 2000 # when checkpoint reached
                 t_sec = time_alive - sector_start
                 sector_start = time_alive
                 if sector_times and t_sec < min(sector_times):
@@ -924,21 +945,22 @@ def ai_simulate(nn, spawn_col, spawn_row, spawn_angle_deg, walls, checkpoints, f
         if cp_timer > CP_TIMEOUT:
             break
 
-        all_cp_done = not checkpoints or next_cp > len(checkpoints)
+        all_cp_done = not checkpoints or next_cp >= len(checkpoints)
         if all_cp_done and finish_cells:
-            cur_cell = cell_of(x, y)
+            on_finish_now = bool(finish_cells & car_cells)
             if not left_start:
-                if cur_cell not in finish_cells:
+                if not on_finish_now:
                     left_start = True
-            elif cur_cell in finish_cells and not on_finish:
-                fitness += 10000
-                fitness -= time_alive * 5
+            elif on_finish_now and not on_finish:
+                fitness += 50000 #big ahh bonus for completing a lap, the most important part of the game I guess
+                fitness -= time_alive * 100 #better time = better fitness so in theory you get faster lap times, but that isn't always the case
+                completed_lap_time = time_alive
                 break
-            on_finish = cur_cell in finish_cells
+            on_finish = on_finish_now
 
-    return fitness, history, timing_history
+    return fitness, history, timing_history, completed_lap_time
 
-def draw_training_screen(screen, font, font_small, gen, total_gens, best_fitness, log, cancel_rect, watch_buttons):
+def draw_training_screen(screen, font, font_small, gen, total_gens, best_fitness, log, cancel_rect, watch_buttons, scroll_offset = 0):
     screen.fill(BGC)
     title = font.render("Training AI..", True, TEXTC)
     screen.blit(title, (WIN_W // 2 - title.get_width() // 2, 40))
@@ -951,26 +973,39 @@ def draw_training_screen(screen, font, font_small, gen, total_gens, best_fitness
         fit = font_small.render(f"Best fitness: {best_fitness:.0f}", True, BETTER)
         screen.blit(fit, (WIN_W // 2 - fit.get_width() // 2, 138))
 
+        ROW_H = 26
+        LIST_TOP = 170
+        LIST_BOT = WIN_H - 120
+        visible = (LIST_BOT  - LIST_TOP) // ROW_H
+        visible_entries = log[scroll_offset : scroll_offset + visible]
+        best_f = max(e[1] for e in log) if log else 0
+        
         #log list
-        y = 180
-        for entry in log:
-            g, f, has_watch = entry
-            row_text = f"Gen {g+1:>3} - fitness {f:.0f}"
-            col = BETTER if f == max(e[1] for e in log) else TEXTBUTLESSVISIBLEC
+        y = LIST_TOP
+        for entry in visible_entries:
+            g, f, lap_t = entry
+            lap_str = fmt_time(lap_t) if lap_t is not None else "None"
+            row_text = f"Gen {g+1:>3} - fitness {f:.0f} | {lap_str}"
+            col = BETTER if f == best_f else TEXTBUTLESSVISIBLEC
             s = font_small.render(row_text, True, col)
-            screen.blit(s, (WIN_W // 2 - 260, y))
+            screen.blit(s, (WIN_W // 2 -300, y))
 
-            btn_rect = watch_buttons.get(g)
-            if btn_rect:
-                hovered = btn_rect.collidepoint(pygame.mouse.get_pos())
-                pygame.draw.rect(screen, HOVERC if hovered else NORMAL, btn_rect, border_radius =3)
-                pygame.draw.rect(screen, MENU_BORDERC, btn_rect, width=1, border_radius = 3)
-                lbl = font_small.render("Watch", True, TEXTC)
-                screen.blit(lbl, (btn_rect.centerx - lbl.get_width() // 2, btn_rect.centery - lbl.get_height() // 2))
+            btn_rect = pygame.Rect(WIN_W // 2 + 200, y + 2, 80, 22)
+            watch_buttons[g] = btn_rect
+            watch_buttons[g] = btn_rect
+            hovered = btn_rect.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(screen, HOVERC if hovered else NORMAL, btn_rect, border_radius =3)
+            
+            pygame.draw.rect(screen, MENU_BORDERC, btn_rect, width=1, border_radius = 3)
+            lbl = font_small.render("Watch", True, TEXTC)
+            screen.blit(lbl, (btn_rect.centerx - lbl.get_width() // 2, btn_rect.centery - lbl.get_height() // 2))
 
-            y += 26
-            if y > WIN_H - 120:
-                break
+            y += ROW_H
+        
+        if len(log) > visible:
+            scroll_hint = font_small.render(f"scroll to see more ({scroll_offset+1}-{min(scroll_offset+visible, len(log))} of {len(log)})", True, TEXTBUTLESSVISIBLEC)
+            screen.blit(scroll_hint, (WIN_W // 2 - scroll_hint.get_width() // 2, LIST_BOT + 4))
+            
 
         hovered = cancel_rect.collidepoint(pygame.mouse.get_pos())
         pygame.draw.rect(screen, BAD if hovered else NORMAL, cancel_rect, border_radius = 8)
@@ -1181,6 +1216,7 @@ def main():
     ai_histories = {} # gen -> history list
     ai_watch_btns = {} # gen _> pygame.Rect (built during draw)
     ai_cancelled = False
+    ai_log_scroll = 0
     ai_training_active = False
 
     menu_y = WIN_H - MENU_H
@@ -1290,6 +1326,7 @@ def main():
                             ai_histories = {}
                             ai_watch_btns = {}
                             ai_cancelled = False
+                            ai_log_scroll = 0
                             mode = "training"
 
             elif event.type == pygame.MOUSEBUTTONDOWN and mode == "select":
@@ -1398,15 +1435,15 @@ def main():
                                 break
                     if ai_cancelled:
                         break
-                    fit, hist, t_hist = ai_simulate(nn, spawn_col, spawn_row, state.spawn_angle, state.walls, list(state.checkpoints), set(state.finish), state.is_loop())
-                    scored.append((fit, nn, hist, t_hist))
+                    fit, hist, t_hist, lap_t = ai_simulate(nn, spawn_col, spawn_row, state.spawn_angle, state.walls, list(state.checkpoints), set(state.finish), state.is_loop())
+                    scored.append((fit, nn, hist, t_hist, lap_t))
 
                 if not ai_cancelled:
                     scored.sort(key=lambda x: x[0], reverse = True)
-                    best_fit, best_nn_this_gen, best_hist, best_t_hist = scored[0]
-                    ai_log.append((gen, best_fit, True))
+                    best_fit, best_nn_this_gen, best_hist, best_t_hist, best_lap_t = scored[0]
+                    ai_log.append((gen, best_fit, best_lap_t))
                     ai_histories[gen] = (best_hist, best_t_hist)
-                    survivors = [nn for _, nn, _, _ in scored[:SURVIVORS]]
+                    survivors = [nn for _, nn, _, _, _ in scored[:SURVIVORS]]
                     weights = [SURVIVORS - i for i in range(SURVIVORS)]
                     new_pop = [scored[0][1].clone()]
                     stale = len(ai_log) > 5 and all(abs(ai_log[-i][1] - best_fit) < 50 for i in range(1, 6))
@@ -1532,7 +1569,7 @@ def main():
             gen_done = len(ai_log)
             best_fit = ai_log[-1][1] if ai_log else 0.0
             cancel_rect = pygame.Rect(WIN_W // 2 - 120, WIN_H - 86, 240, 44)
-            draw_training_screen(screen, font, font_small, gen_done - 1, GENERATIONS, best_fit, ai_log, cancel_rect, ai_watch_btns)
+            draw_training_screen(screen, font, font_small, gen_done - 1, GENERATIONS, best_fit, ai_log, cancel_rect, ai_watch_btns, ai_log_scroll)
             for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
                 if event.button == 1:
                     if cancel_rect.collidepoint(event.pos):
@@ -1545,6 +1582,9 @@ def main():
                                 hist, t_hist = ai_histories[g]
                                 run_replay(screen, clock, font, font_small, hist, t_hist, g, state.walls, list(state.checkpoints), set(state.finish), cam_x, cam_y, zoom)
                                 break
+            for event in pygame.event.get(pygame.MOUSEWHEEL):
+                max_scroll = max(0, len(ai_log) - 20)
+                ai_log_scroll = max(0, min(max_scroll, ai_log_scroll - event.y))
             
         elif mode == "io_popup":
             export_rect, import_rect = draw_io_popup(screen, font, font_small, mouse_pos)
