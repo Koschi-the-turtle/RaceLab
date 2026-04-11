@@ -3,8 +3,8 @@
 RaceLab is a python program which allows you to create your own custom maps and tracks, test them, and even train AIs to drive on them !
 
 # Notice:
-If you want to simply demo test this, especially for the AI training, I recommend you use the map I made as it has shown correct results over numerous tests.
-To do that, simply download the json file, and while in editor mode in the main program, press Enter and load the json file.
+If you simply want to demo test this, especially for the AI training, I recommend you use the map I made as it has shown correct results over numerous tests.
+To do that, simply download the json file, and while in editor mode in the main program, press Enter and load the json file, then press T to start the training and wait like 10-15 minutes for it to finish.
 
 # Map Editor
 
