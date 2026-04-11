@@ -54,14 +54,14 @@ RAY_ANGLES = list(range(-120, 121, 30)) #-120, -90, -60, -30, 0, 30, 60, 90, 120
 RAY_MAX = 20 #the ray's maximum distance in cells
 
 CAR_DEFS = [
-    {"name": "Not a Ferrari©", "file": "pitstop_car_1.png"},
-    {"name": "white pow(d)er", "file": "pitstop_car_2.png"},
-    {"name": "i'M bATmAn...", "file": "pitstop_car_3.png"},
-    {"name": "blue meth(anol)", "file": "pitstop_car_4.png"},
-    {"name": "oh a yellow car WAIT NO ARGH", "file": "pitstop_car_5.png"},
-    {"name": "Vorsprung durch Technik ?", "file": "pitstop_car_7.png"},
-    {"name": "Twitch's gambling cousin", "file": "pitstop_car_9.png"},
-    {"name": "Nike's mechanic uncle", "file": "pitstop_car_10.png"}
+    {"name": "Not a Ferrari©", "file": "cars/pitstop_car_1.png"},
+    {"name": "white pow(d)er", "file": "cars/pitstop_car_2.png"},
+    {"name": "i'M bATmAn...", "file": "cars/pitstop_car_3.png"},
+    {"name": "blue meth(anol)", "file": "cars/pitstop_car_4.png"},
+    {"name": "oh a yellow car WAIT NO ARGH", "file": "cars/pitstop_car_5.png"},
+    {"name": "Vorsprung durch Technik ?", "file": "cars/pitstop_car_7.png"},
+    {"name": "Twitch's gambling cousin", "file": "cars/pitstop_car_9.png"},
+    {"name": "Nike's mechanic uncle", "file": "cars/pitstop_car_10.png"}
 ]
 
 #Tools
